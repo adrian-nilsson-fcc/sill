@@ -25,8 +25,10 @@ class API:
     def get(self, path, **requests_kwargs):
         def decorator_get(f):
             @wraps(f)
-            def wrapper_get():
-                url = self.url + path
+            def wrapper_get(**kwargs):
+                formatted_path = path.format(**kwargs)
+                url = self.url + formatted_path
+
                 prepared_req = self._prepare_request("get", url=url, **requests_kwargs)
                 logger.debug(f"{prepared_req.headers=}")
                 with requests.Session() as session:
