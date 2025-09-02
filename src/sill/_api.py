@@ -86,7 +86,7 @@ class API:
         return decorator_get
 
     def post(self, path, **requests_kwargs):
-        def decorator_get(f):
+        def decorator_post(f):
             @wraps(f)
             def wrapper_post(*args, **kwargs):
                 url = self.url + path
@@ -103,4 +103,4 @@ class API:
 
             return wrapper_post
 
-        return decorator_get
+        return decorator_post
