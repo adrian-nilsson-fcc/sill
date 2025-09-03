@@ -17,7 +17,12 @@ def list_customers(resp):
     return resp.json()
 
 
-# TODO:  deal with query params
-@quickpickdeal.get(path="Customer/GetCustomerById?id=2")
-def list_customer(resp):
+@quickpickdeal.get(path="Customer/GetCustomerById")
+def get_customer(resp):
+    """
+    Expects query parameter 'id'
+    """
     return resp.json()
+
+
+__all__ = ["list_customers", "get_customer"]

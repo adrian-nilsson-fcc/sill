@@ -16,18 +16,25 @@ class API:
     middleware: list = field(default_factory=list)
 
     def _prepare_request(self, method: str, **kwargs) -> requests.PreparedRequest:
+        """
+        Build a Request by applying all middleware
+        """
         req = requests.Request(method, **kwargs)
         req = functools.reduce(
             lambda acc, f: f.process_request(acc), self.middleware, req
-        )  # apply middleware
+        )
         return req.prepare()
 
     def get(self, path, **requests_kwargs):
         def decorator_get(f):
             @wraps(f)
-            def wrapper_get():
-                url = self.url + path
-                prepared_req = self._prepare_request("get", url=url, **requests_kwargs)
+            def wrapper_get(*, params: dict | None = None, **kwargs):
+                formatted_path = path.format(**kwargs)
+                url = self.url + formatted_path
+
+                prepared_req = self._prepare_request(
+                    "get", url=url, params=params, **requests_kwargs
+                )
                 logger.debug(f"{prepared_req.headers=}")
                 with requests.Session() as session:
                     resp = session.send(prepared_req)
