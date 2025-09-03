@@ -55,8 +55,12 @@ class BaseAuthTokenMiddleware:
         if self.token_file and self.token_file.is_file():
             self.token_model = BaseAuthToken.from_file(self.token_file)
 
-    def is_valid(self):
-        return self.token_model.valid_until > datetime.now(timezone.utc)
+    def is_valid(self) -> bool:
+        valid = self.token_model.valid_until > datetime.now(timezone.utc)
+        if not valid:
+            logger.info(f"token expired: expired on {self.token_model.valid_until}")
+
+        return valid
 
     def process_request(self, req: requests.Request) -> requests.Request:
         if self.token_model is None or self.is_valid() == False:
@@ -67,6 +71,7 @@ class BaseAuthTokenMiddleware:
         return req
 
     def _refresh_token(self) -> None:
+        logger.info("requesting a new auth token")
         new_token = self.token_parser.get_token()
 
         # update (create or overwrite) token on file, if set
