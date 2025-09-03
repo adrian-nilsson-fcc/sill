@@ -10,6 +10,6 @@ def test_list_customers():
     assert resp["Error"] is None
 
 
-def test_list_customer():
-    resp = list_customer()
+def test_get_customer():
+    resp = get_customer(params={"id": 2})
     assert resp["Error"] is None
