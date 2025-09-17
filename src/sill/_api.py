@@ -1,11 +1,9 @@
-from dataclasses import dataclass, field
-from functools import wraps
 import functools
 import logging
-
+from dataclasses import dataclass, field
+from functools import wraps
 
 import requests
-
 
 logger = logging.getLogger(__name__)
 

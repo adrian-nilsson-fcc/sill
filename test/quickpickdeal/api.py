@@ -1,4 +1,4 @@
-from sill import API, BaseAuthTokenMiddleware
+from sill import API, BearerTokenMiddleware
 
 from .auth import QuickPickDealTokenEndpoint
 
@@ -8,7 +8,7 @@ token_endpoint = QuickPickDealTokenEndpoint(BASE_URL + "Auth/GetBearerToken")
 
 quickpickdeal = API(
     url=BASE_URL,
-    middleware=[BaseAuthTokenMiddleware(token_endpoint, token_file="test_token.json")],
+    middleware=[BearerTokenMiddleware(token_endpoint, token_file="test_token.json")],
 )
 
 

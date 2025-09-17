@@ -1,12 +1,12 @@
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import logging
 from pathlib import Path
 from typing import Self
 
-from pydantic import BaseModel
 import requests
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class TokenEndpoint(ABC):
 
     @abstractmethod
     def to_base_token(self, resp) -> BaseAuthToken:
-        raise NotImplemented()
+        raise NotImplementedError()
 
     def request_token(self) -> requests.Response:
         return requests.get(self.endpoint)
@@ -40,7 +40,7 @@ class TokenEndpoint(ABC):
         return self.to_base_token(resp)
 
 
-class BaseAuthTokenMiddleware:
+class BearerTokenMiddleware:
     def __init__(
         self, token_parser: TokenEndpoint, token_file: Path | str | None = None
     ):
@@ -63,7 +63,7 @@ class BaseAuthTokenMiddleware:
         return valid
 
     def process_request(self, req: requests.Request) -> requests.Request:
-        if self.token_model is None or self.is_valid() == False:
+        if self.token_model is None or not self.is_valid():
             self._refresh_token()
 
         logger.debug("Adding auth token to request header")
