@@ -11,15 +11,20 @@ logger = logging.getLogger(__name__)
 @dataclass
 class API:
     url: str
-    middleware: list = field(default_factory=list)
+    middleware: list[object] = field(default_factory=list)
 
     def _prepare_request(self, method: str, **kwargs) -> requests.PreparedRequest:
         """
-        Build a Request by applying all middleware
+        Build a Request by applying all middleware with a process_request method
         """
+        request_altering_middleware = filter(
+            lambda m: hasattr(m, "process_request") and callable(m.process_request),
+            self.middleware,
+        )
+
         req = requests.Request(method, **kwargs)
         req = functools.reduce(
-            lambda acc, f: f.process_request(acc), self.middleware, req
+            lambda acc, f: f.process_request(acc), request_altering_middleware, req
         )
         return req.prepare()
 
