@@ -62,13 +62,15 @@ class BearerTokenMiddleware:
 
         return valid
 
-    def process_request(self, req: requests.Request) -> requests.Request:
+    def process_request(self, **request_kwargs) -> dict[str]:
         if self.token_model is None or not self.is_valid():
             self._refresh_token()
 
         logger.debug("Adding auth token to request header")
-        req.headers["Authorization"] = f"Bearer {self.token_model.token}"
-        return req
+        request_kwargs.setdefault("headers", {})
+        request_kwargs["headers"]["Authorization"] = f"Bearer {self.token_model.token}"
+
+        return request_kwargs
 
     def _refresh_token(self) -> None:
         logger.info("requesting a new auth token")

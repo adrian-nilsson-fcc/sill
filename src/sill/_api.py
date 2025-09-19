@@ -13,34 +13,49 @@ class API:
     url: str
     middleware: list[object] = field(default_factory=list)
 
-    def _prepare_request(self, method: str, **kwargs) -> requests.PreparedRequest:
+    def _apply_request_middleware(self, **request_kwargs) -> dict[str]:
         """
-        Build a Request by applying all middleware with a process_request method
+        Apply all middleware with a process_request method
+
+        :param **request_kwargs: arguments to requests.request that middleware may alter
         """
         request_altering_middleware = filter(
             lambda m: hasattr(m, "process_request") and callable(m.process_request),
             self.middleware,
         )
 
-        req = requests.Request(method, **kwargs)
-        req = functools.reduce(
-            lambda acc, f: f.process_request(acc), request_altering_middleware, req
+        req_kwargs = functools.reduce(
+            lambda acc, f: f.process_request(**acc),
+            request_altering_middleware,
+            request_kwargs,
         )
-        return req.prepare()
+        return req_kwargs
 
-    def get(self, path, **requests_kwargs):
+    def get(self, path: str, **request_glob_kwargs):
         def decorator_get(f):
             @wraps(f)
-            def wrapper_get(*, params: dict | None = None, **kwargs):
-                formatted_path = path.format(**kwargs)
+            def wrapper_get(*, path_format: dict[str] | None = None, **request_kwargs):
+                formatted_path = (
+                    path if path_format is None else path.format(**path_format)
+                )
                 url = self.url + formatted_path
 
-                prepared_req = self._prepare_request(
-                    "get", url=url, params=params, **requests_kwargs
+                request_glob_kwargs["method"] = "GET"
+                request_glob_kwargs["url"] = url
+                # mimic requests' behavior
+                request_glob_kwargs.setdefault("allow_redirects", True)
+
+                # middleware may alter the endpoint-specific request arguments
+                after_middleware_kwargs = self._apply_request_middleware(
+                    **request_glob_kwargs
                 )
-                logger.debug(f"{prepared_req.headers=}")
-                with requests.Session() as session:
-                    resp = session.send(prepared_req)
+                logger.debug(
+                    f"request headers: {after_middleware_kwargs.get('headers')}"
+                )
+
+                # call-site arguments has highest precedence
+                request_kwargs = after_middleware_kwargs | request_kwargs
+                resp = requests.request(**request_kwargs)
 
                 resp.raise_for_status()
 
@@ -50,22 +65,29 @@ class API:
 
         return decorator_get
 
-    def post(self, path, **requests_kwargs):
+    def post(self, path, **request_glob_kwargs):
         def decorator_post(f):
             @wraps(f)
-            def wrapper_post(*args, **kwargs):
+            def wrapper_post(*args, request_kwargs: dict[str], **kwargs):
                 url = self.url + path
+                request_glob_kwargs["method"] = "POST"
+                request_glob_kwargs["url"] = url
+
                 post_json = f(*args, **kwargs)
                 logger.debug(f"Posting to {url} with data: {post_json}")
-                logger.debug(f"Request kwargs: {requests_kwargs}")
 
-                prepared_req = self._prepare_request(
-                    "post", url=url, json=post_json, **requests_kwargs
+                # middleware may alter any endpoint-specific request arguments
+                after_middleware_kwargs = self._apply_request_middleware(
+                    json=post_json, **request_glob_kwargs
                 )
-                with requests.Session() as session:
-                    resp = session.send(prepared_req)
+
+                # call-site arguments has highest precedence
+                request_kwargs = after_middleware_kwargs | request_kwargs
+                logger.debug(f"final request kwargs: {request_glob_kwargs}")
+                resp = requests.request(**request_kwargs)
 
                 resp.raise_for_status()
+
                 return resp.json()
 
             return wrapper_post
