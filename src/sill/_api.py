@@ -53,9 +53,9 @@ class API:
                     f"request headers: {after_middleware_kwargs.get('headers')}"
                 )
 
-                # call-site arguments has highest precedence
-                request_kwargs = after_middleware_kwargs | request_kwargs
-                resp = requests.request(**request_kwargs)
+                # call-site arguments has the highest precedence
+                final_request_kwargs = after_middleware_kwargs | request_kwargs
+                resp = requests.request(**final_request_kwargs)
 
                 resp.raise_for_status()
 
@@ -68,7 +68,7 @@ class API:
     def post(self, path, **request_glob_kwargs):
         def decorator_post(f):
             @wraps(f)
-            def wrapper_post(*args, request_kwargs: dict[str], **kwargs):
+            def wrapper_post(*args, request_kwargs: dict[str] | None = None, **kwargs):
                 url = self.url + path
                 request_glob_kwargs["method"] = "POST"
                 request_glob_kwargs["url"] = url
@@ -81,10 +81,14 @@ class API:
                     json=post_json, **request_glob_kwargs
                 )
 
-                # call-site arguments has highest precedence
-                request_kwargs = after_middleware_kwargs | request_kwargs
-                logger.debug(f"final request kwargs: {request_glob_kwargs}")
-                resp = requests.request(**request_kwargs)
+                # call-site arguments has the highest precedence
+                caller_kwargs_or_default = request_kwargs or {}
+                final_request_kwargs = (
+                    after_middleware_kwargs | caller_kwargs_or_default
+                )
+
+                logger.debug(f"final request kwargs: {final_request_kwargs}")
+                resp = requests.request(**final_request_kwargs)
 
                 resp.raise_for_status()
 
