@@ -1,8 +1,8 @@
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+from quickpickdeal.api import get_customer, list_customers
 
-from quickpickdeal.api import *
+logging.basicConfig(level=logging.DEBUG)
 
 
 def test_list_customers():

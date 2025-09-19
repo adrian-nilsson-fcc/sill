@@ -19,7 +19,7 @@ class BaseAuthToken(BaseModel):
     def from_file(cls, json_file: Path | str) -> Self:
         file = Path(json_file)
         new = cls.model_validate_json(file.read_text())
-        logger.debug(f"read token from {file.stem}: {new}")
+        logger.debug(f"read token from {file.name}: {new}")
 
         return new
 
