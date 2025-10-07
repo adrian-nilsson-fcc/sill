@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Self
 
 import requests
-from pydantic import BaseModel
+from pydantic import (
+    AliasChoices,
+    AliasGenerator,
+    BaseModel,
+    ConfigDict,
+    alias_generators,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +20,17 @@ logger = logging.getLogger(__name__)
 class BaseAuthToken(BaseModel):
     token: str
     valid_until: datetime
+
+    # In addition to assigning fields by name, we accept camel and pascal case variants too
+    model_config = ConfigDict(
+        alias_generator=AliasGenerator(
+            validation_alias=lambda field: AliasChoices(
+                alias_generators.to_camel(field), alias_generators.to_pascal(field)
+            )
+        ),
+        validate_by_alias=True,
+        validate_by_name=True,
+    )
 
     @classmethod
     def from_file(cls, json_file: Path | str) -> Self:
