@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Self
 
 import requests
-from pydantic import BaseModel
+from pydantic import (
+    AliasChoices,
+    AliasGenerator,
+    BaseModel,
+    ConfigDict,
+    alias_generators,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +21,22 @@ class BaseAuthToken(BaseModel):
     token: str
     valid_until: datetime
 
+    # In addition to assigning fields by name, we accept camel and pascal case variants too
+    model_config = ConfigDict(
+        alias_generator=AliasGenerator(
+            validation_alias=lambda field: AliasChoices(
+                alias_generators.to_camel(field), alias_generators.to_pascal(field)
+            )
+        ),
+        validate_by_alias=True,
+        validate_by_name=True,
+    )
+
     @classmethod
     def from_file(cls, json_file: Path | str) -> Self:
         file = Path(json_file)
         new = cls.model_validate_json(file.read_text())
-        logger.debug(f"read token from {file.stem}: {new}")
+        logger.debug(f"read token from {file.name}: {new}")
 
         return new
 
@@ -62,13 +79,15 @@ class BearerTokenMiddleware:
 
         return valid
 
-    def process_request(self, req: requests.Request) -> requests.Request:
+    def process_request(self, **request_kwargs) -> dict[str]:
         if self.token_model is None or not self.is_valid():
             self._refresh_token()
 
         logger.debug("Adding auth token to request header")
-        req.headers["Authorization"] = f"Bearer {self.token_model.token}"
-        return req
+        request_kwargs.setdefault("headers", {})
+        request_kwargs["headers"]["Authorization"] = f"Bearer {self.token_model.token}"
+
+        return request_kwargs
 
     def _refresh_token(self) -> None:
         logger.info("requesting a new auth token")
