@@ -27,7 +27,7 @@ def get_customer(resp):
 
 @quickpickdeal.post(path="Customer/CreateCustomer")
 def create_customer(email: str, first_name: str, last_name: str):
-    return {"email": email, "FirstName": first_name, "LastName": "Doe"}
+    return {"email": email, "FirstName": first_name, "LastName": last_name}
 
 
 __all__ = ["list_customers", "get_customer"]
