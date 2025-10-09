@@ -1,4 +1,6 @@
-# Use manual testing for now
+
+name: Lint and Test
+
 on:
   workflow_call:
   pull_request:
