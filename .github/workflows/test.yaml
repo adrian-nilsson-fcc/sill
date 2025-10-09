@@ -18,8 +18,14 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Run linting
+      - name: Run ruff check
         run: uvx ruff check .
+
+      - name: Run yaml check
+        run: uv run pre-commit run check-yaml --all-files
+
+      - name: Run toml check
+        run: uv run pre-commit run check-toml --all-files
 
   test:
     runs-on: ubuntu-latest
