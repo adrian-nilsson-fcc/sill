@@ -1,14 +1,10 @@
 name: Release
 
-# This workflow runs on any tag push
-#on:
-#  push:
-#    tags:
-#      - "[0-9]+\.[0-9]+\.[0-9]+"
-
-# Use manual testing for now
-
+# This workflow runs on any tag push, or manually (for testing)
 on:
+  push:
+    tags:
+      - "*.*.*"
   workflow_dispatch:
     inputs:
       tag:
