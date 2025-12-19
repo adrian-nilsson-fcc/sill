@@ -4,13 +4,10 @@ version = "0.4.0"
 description = "sill: simple internet lookup library"
 readme = "README.md"
 authors = [
-    { name = "Adrian Nilsson", email = "adrian.nilsson@fcc.chalmers.se" }
+    { name = "Adrian Nilsson", email = "adrian.nilsson@fcc.chalmers.se" },
 ]
 requires-python = ">=3.13"
-dependencies = [
-    "pydantic>=2.11.7",
-    "requests>=2.32.5",
-]
+dependencies = ["pydantic>=2.11.7", "requests>=2.32.5"]
 
 [build-system]
 requires = ["uv_build>=0.8.10,<0.9.0"]
@@ -21,4 +18,5 @@ dev = [
     "hypothesis>=6.140.3",
     "pre-commit>=4.3.0",
     "pytest>=8.4.1",
+    "pytest-httpserver>=1.1.3",
 ]
