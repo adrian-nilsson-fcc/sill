@@ -61,6 +61,7 @@ class API:
 
                 return f(resp)
 
+            wrapper_get._method = "GET"  # metadata for, e.g., batching
             return wrapper_get
 
         return decorator_get
@@ -94,6 +95,7 @@ class API:
 
                 return resp.json()
 
+            wrapper_post._method = "POST"  # metadata for, e.g., batching
             return wrapper_post
 
         return decorator_post
