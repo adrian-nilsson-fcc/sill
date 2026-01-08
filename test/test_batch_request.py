@@ -1,7 +1,7 @@
 import json
 from contextlib import contextmanager
-from datetime import UTC, datetime
-from itertools import dropwhile, takewhile
+from datetime import UTC, datetime, timedelta
+from itertools import chain, dropwhile, takewhile
 from operator import itemgetter
 
 from hypothesis import given
@@ -66,7 +66,18 @@ def handler_factory(data):
 def history_endpoint(base_url: str, path: str):
     api = sill.API(url=base_url)
 
-    @api.get(path="history")
+    @api.get(path=path)
+    def get_history(resp):
+        return resp
+
+    return get_history
+
+
+def history_batched_endpoint(base_url: str, path: str, chunk_size: timedelta):
+    api = sill.API(url=base_url)
+
+    @sill.utils.batched(start_arg="from", end_arg="to", chunk_size=chunk_size)
+    @api.get(path=path)
     def get_history(resp):
         return resp
 
@@ -74,9 +85,10 @@ def history_endpoint(base_url: str, path: str):
 
 
 @given(ts=st_timeseries)
-def test_batched_request_full(ts, make_httpserver):
+def test_batched_server(ts, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
+
     request_payload = {"from": ts[0]["ts"]}
     if len(ts) > 1:
         request_payload["to"] = ts[-1]["ts"]
@@ -89,6 +101,39 @@ def test_batched_request_full(ts, make_httpserver):
         resp_values = TypeAdapter(list[dict[str, datetime | float]]).validate_json(
             resp.content
         )
+        assert resp_values == ts
+    finally:
+        server.clear()
+
+
+@given(
+    ts=st_timeseries.filter(lambda ts: len(ts) > 1),
+    n_chunks=st.integers(min_value=2, max_value=10),
+)
+def test_batched_request(ts, n_chunks, make_httpserver):
+    server = make_httpserver
+    handler = handler_factory(ts)
+
+    request_payload = {"from": ts[0]["ts"], "to": ts[-1]["ts"]}
+    chunk_size = (ts[-1]["ts"] - ts[0]["ts"]) / n_chunks
+
+    try:
+        server.expect_request("/history", method="GET").respond_with_handler(handler)
+        get_history = history_batched_endpoint(
+            server.url_for(""), path="history", chunk_size=chunk_size
+        )
+
+        resp = get_history(json=to_jsonable_python(request_payload))
+        assert (
+            len(resp) >= n_chunks - 1 and len(resp) <= n_chunks + 1
+        )  # rounding can cause this to be off-by-one
+
+        resp_validator = TypeAdapter(list[dict[str, datetime | float]])
+        resp_json = [
+            resp_validator.validate_json(r.content) for r in resp if r.content != b"[]"
+        ]
+
+        resp_values = list(chain.from_iterable(resp_json))
         assert resp_values == ts
     finally:
         server.clear()
