@@ -1,6 +1,6 @@
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import dropwhile, takewhile
 from operator import itemgetter
 
@@ -13,10 +13,15 @@ from werkzeug import Request, Response
 
 import sill
 
+_now = datetime.now(tz=UTC)
+
 ts_getter = itemgetter("ts")
 st_observations = st.fixed_dictionaries(
     {
-        "ts": st.datetimes(),
+        "ts": st.datetimes(
+            min_value=datetime(_now.year - 50, 1, 1),
+            max_value=datetime(_now.year + 50, 1, 1),
+        ),
         "value": st.floats(allow_nan=False),
     }
 )
