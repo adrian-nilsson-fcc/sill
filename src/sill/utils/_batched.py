@@ -1,35 +1,58 @@
-import inspect
+import warnings
 from datetime import UTC, datetime, timedelta
 from functools import wraps
 from itertools import chain
 
 
+def _saturating_add(dt: datetime, delta: timedelta) -> datetime:
+    """
+    Adds a timedelta to a datetime, saturating at datetime.max on overflow.
+
+    :param dt: The original datetime.
+    :param delta: The timedelta to add.
+    :return: The resulting datetime, or datetime.max if overflow occurs.
+    """
+    try:
+        return dt + delta
+    except OverflowError:
+        warnings.warn(
+            f"Overflow when adding {delta} to {dt}; returning datetime.max instead."
+        )
+        return datetime.max.replace(tzinfo=dt.tzinfo)
+
+
 def _chunk_dates(
-    start: datetime, end: datetime | None = None, *, chunk_size: timedelta | None = None
+    start: datetime, end: datetime | None = None, *, chunk_size: timedelta
 ):
     """
     Yield consecutive date ranges between start and end, chunked by chunk_size.
 
     :param start: Start datetime.
     :param end: End datetime (defaults to now if None).
-    :param chunk_size: Size of each chunk (defaults to 4 weeks if None).
+    :param chunk_size: Size of each chunk
     :raises ValueError: If start is after end.
     :yields: Tuple of (chunk_start, chunk_end) datetimes.
     """
-    chunk_size = chunk_size or timedelta(weeks=4)
     end = end or datetime.now(UTC)
 
     if start > end:
         raise ValueError(f"{end=} is later than or equal to {start=}")
 
+    if chunk_size > (end - start):
+        warnings.warn(
+            "Batching is unnecessary since the chunk size covers the entire requested interval."
+        )
+
     current_start = start
     while current_start < end:
-        current_end = min(current_start + chunk_size, end)
+        new_end = _saturating_add(current_start, chunk_size)
+
+        current_end = min(new_end, end)
         yield (current_start, current_end)
         current_start = current_end
 
 
-def batched(f, start_arg: str, end_arg: str):
+def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta):
     """
     Decorator to batch requests over time intervals.
 
@@ -38,26 +61,26 @@ def batched(f, start_arg: str, end_arg: str):
     then called repeatedly for each chunked interval, and the results will be
     concatenated before returning.
 
-    :param f: Function to decorate.
     :param start_arg: Name of the start datetime parameter in the decorated function.
     :param end_arg: Name of the end datetime parameter in the decorated function.
     """
 
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        sig = inspect.signature(f)
-        bound = sig.bind(*args, **kwargs)
-        bound.apply_defaults()
+    def decorator_batched(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            start = datetime.fromisoformat(kwargs["json"][start_arg])
+            end = datetime.fromisoformat(kwargs["json"][end_arg])
 
-        start = bound.arguments[start_arg]
-        end = bound.arguments.get(end_arg)
+            def batch_iter():
+                for start_, end_ in _chunk_dates(start, end, chunk_size=chunk_size):
+                    kwargs["json"][start_arg] = start_.isoformat()
+                    kwargs["json"][end_arg] = end_.isoformat()
+                    yield f(*args, **kwargs)  # yields a Response
 
-        def batch_iter():
-            for start_, end_ in _chunk_dates(start, end):
-                bound.arguments[start_arg] = start_
-                bound.arguments[end_arg] = end_
-                yield f(*bound.args, **bound.kwargs)  # yields response data
+            chained = list(chain(batch_iter()))
 
-        return list(chain(*batch_iter()))
+            return chained
 
-    return wrapper
+        return wrapper
+
+    return decorator_batched
