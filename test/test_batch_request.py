@@ -46,8 +46,8 @@ def default_server():
 def handler_factory(data):
     def handler(request: Request) -> Response:
         request_json = request.get_json()
-        start = datetime.fromisoformat(request_json["from"])
-        end = request_json.get("to")
+        start = datetime.fromisoformat(request_json["start"])
+        end = request_json.get("end")
 
         response_data = dropwhile(lambda o: o["ts"] < start, data)
         if end is not None:
@@ -76,7 +76,7 @@ def history_endpoint(base_url: str, path: str):
 def history_batched_endpoint(base_url: str, path: str, chunk_size: timedelta):
     api = sill.API(url=base_url)
 
-    @sill.utils.batched(start_arg="from", end_arg="to", chunk_size=chunk_size)
+    @sill.utils.batched(start_arg="start", end_arg="end", chunk_size=chunk_size)
     @api.get(path=path)
     def get_history(resp):
         return resp
@@ -89,9 +89,9 @@ def test_batched_server(ts, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
 
-    request_payload = {"from": ts[0]["ts"]}
+    request_payload = {"start": ts[0]["ts"]}
     if len(ts) > 1:
-        request_payload["to"] = ts[-1]["ts"]
+        request_payload["end"] = ts[-1]["ts"]
 
     try:
         server.expect_request("/history", method="GET").respond_with_handler(handler)
@@ -114,7 +114,7 @@ def test_batched_request(ts, n_chunks, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
 
-    request_payload = {"from": ts[0]["ts"], "to": ts[-1]["ts"]}
+    request_payload = {"start": ts[0]["ts"], "end": ts[-1]["ts"]}
     chunk_size = (ts[-1]["ts"] - ts[0]["ts"]) / n_chunks
 
     try:
@@ -143,7 +143,7 @@ def test_ts_regression(httpserver):
     data = [{"ts": datetime(2000, 1, 1, 0, 0), "value": 0.0}]
 
     handler = handler_factory(data)
-    request_payload = {"from": data[0]["ts"]}
+    request_payload = {"start": data[0]["ts"]}
 
     httpserver.expect_request("/history", method="GET").respond_with_handler(handler)
     get_history = history_endpoint(httpserver.url_for(""), path="history")
