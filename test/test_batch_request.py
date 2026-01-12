@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from itertools import chain, dropwhile, takewhile
 from operator import itemgetter
 
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 from pydantic import TypeAdapter
 from pydantic_core import to_jsonable_python
@@ -73,7 +73,7 @@ def history_endpoint(base_url: str, path: str):
     return get_history
 
 
-def history_batched_endpoint(base_url: str, path: str, chunk_size: timedelta):
+def history_batched_get(base_url: str, path: str, chunk_size: timedelta):
     api = sill.API(url=base_url)
 
     @sill.utils.batched(start_arg="start", end_arg="end", chunk_size=chunk_size)
@@ -82,6 +82,27 @@ def history_batched_endpoint(base_url: str, path: str, chunk_size: timedelta):
         return resp
 
     return get_history
+
+
+def history_batched_post(base_url: str, path: str, chunk_size: timedelta):
+    api = sill.API(url=base_url)
+
+    @sill.utils.batched(start_arg="start", end_arg="end", chunk_size=chunk_size)
+    @api.post(path=path)
+    def get_history():
+        return None
+
+    return get_history
+
+
+def _get_batched_handler(method: str):
+    match method:
+        case "GET":
+            return history_batched_get
+        case "POST":
+            return history_batched_post
+        case _:
+            raise ValueError(f"Unsupported method: {method}")
 
 
 @given(ts=st_timeseries)
@@ -93,11 +114,12 @@ def test_batched_server(ts, make_httpserver):
     if len(ts) > 1:
         request_payload["end"] = ts[-1]["ts"]
 
+    request_kwargs = {"json": to_jsonable_python(request_payload)}
     try:
         server.expect_request("/history", method="GET").respond_with_handler(handler)
         get_history = history_endpoint(server.url_for(""), path="history")
 
-        resp = get_history(json=to_jsonable_python(request_payload))
+        resp = get_history(request_kwargs=request_kwargs)
         resp_values = TypeAdapter(list[dict[str, datetime | float]]).validate_json(
             resp.content
         )
@@ -109,23 +131,28 @@ def test_batched_server(ts, make_httpserver):
 @given(
     ts=st_timeseries.filter(lambda ts: len(ts) > 1),
     n_chunks=st.integers(min_value=2, max_value=10),
+    method=st.sampled_from(["GET", "POST"]),
 )
-def test_batched_request(ts, n_chunks, make_httpserver):
+def test_batched_request(ts, n_chunks, method, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
 
     request_payload = {"start": ts[0]["ts"], "end": ts[-1]["ts"]}
     chunk_size = (ts[-1]["ts"] - ts[0]["ts"]) / n_chunks
+    assume(chunk_size > timedelta(0))
 
+    request_kwargs = {"json": to_jsonable_python(request_payload)}
+
+    endpoint = _get_batched_handler(method)
     try:
-        server.expect_request("/history", method="GET").respond_with_handler(handler)
-        get_history = history_batched_endpoint(
+        server.expect_request("/history", method=method).respond_with_handler(handler)
+        get_history = endpoint(
             server.url_for(""), path="history", chunk_size=chunk_size
         )
 
-        resp = get_history(json=to_jsonable_python(request_payload))
+        resp = get_history(request_kwargs=request_kwargs)
         assert (
-            len(resp) >= n_chunks - 1 and len(resp) <= n_chunks + 1
+            len(resp) >= n_chunks and len(resp) <= n_chunks + 1
         )  # rounding can cause this to be off-by-one
 
         resp_validator = TypeAdapter(list[dict[str, datetime | float]])
@@ -144,11 +171,12 @@ def test_ts_regression(httpserver):
 
     handler = handler_factory(data)
     request_payload = {"start": data[0]["ts"]}
+    request_kwargs = {"json": to_jsonable_python(request_payload)}
 
     httpserver.expect_request("/history", method="GET").respond_with_handler(handler)
     get_history = history_endpoint(httpserver.url_for(""), path="history")
 
-    resp = get_history(json=to_jsonable_python(request_payload))
+    resp = get_history(request_kwargs=request_kwargs)
     resp_values = TypeAdapter(list[dict[str, datetime | float]]).validate_json(
         resp.content
     )

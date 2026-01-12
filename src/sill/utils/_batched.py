@@ -35,6 +35,9 @@ def _chunk_dates(
     """
     end = end or datetime.now(UTC)
 
+    if chunk_size == timedelta(0):
+        raise ValueError("chunk_size must be greater than zero")
+
     if start > end:
         raise ValueError(f"{end=} is later than or equal to {start=}")
 
@@ -68,19 +71,57 @@ def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta):
     def decorator_batched(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
-            start = datetime.fromisoformat(kwargs["json"][start_arg])
-            end = datetime.fromisoformat(kwargs["json"][end_arg])
+            start, end = _extract_interval(start_arg, end_arg, kwargs=kwargs)
 
             def batch_iter():
+                request_json = kwargs["request_kwargs"].setdefault("json", {})
                 for start_, end_ in _chunk_dates(start, end, chunk_size=chunk_size):
-                    kwargs["json"][start_arg] = start_.isoformat()
-                    kwargs["json"][end_arg] = end_.isoformat()
-                    yield f(*args, **kwargs)  # yields a Response
+                    request_json[start_arg] = start_.isoformat()
+                    request_json[end_arg] = end_.isoformat()
 
-            chained = list(chain(batch_iter()))
+                    resp = f(*args, **kwargs)
+                    yield resp
 
-            return chained
+            responses = list(chain(batch_iter()))
+            return responses
 
         return wrapper
 
     return decorator_batched
+
+
+def _extract_interval(
+    start_arg: str,
+    end_arg: str,
+    *,
+    kwargs: dict,
+) -> tuple[datetime, datetime]:
+    request_kwargs = kwargs.get("request_kwargs", None)
+
+    if request_kwargs is None:
+        raise ValueError(
+            "Start and end times must be passed in the 'request_kwargs' argument, but it was not found."
+        )
+
+    start = None
+    end = None
+    if (json_kwarg := request_kwargs.get("json", None)) is not None:
+        start = json_kwarg.get(start_arg, None)
+        end = json_kwarg.get(end_arg, None)
+
+    if start is None and end is None:
+        # For now, only look in json (no support for query params yet)
+        raise ValueError(f"Expected start argument '{start_arg}' not found in kwargs")
+
+    return _to_datetime(start), _to_datetime(end)
+
+
+def _to_datetime(dt: str | datetime) -> datetime:
+    """Helper to convert a possibly already serialized datetime (i.e., a timestamp string) to a datetime object."""
+    match dt:
+        case str():
+            return datetime.fromisoformat(dt)
+        case datetime():
+            return dt
+        case _:
+            raise TypeError(f"Expected str or datetime, got {type(dt)}")

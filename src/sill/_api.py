@@ -34,7 +34,12 @@ class API:
     def get(self, path: str, **request_glob_kwargs):
         def decorator_get(f):
             @wraps(f)
-            def wrapper_get(*, path_format: dict[str] | None = None, **request_kwargs):
+            def wrapper_get(
+                *,
+                path_format: dict[str] | None = None,
+                request_kwargs: dict[str] | None = None,
+                **extra_request_kwargs,
+            ):
                 formatted_path = (
                     path if path_format is None else path.format(**path_format)
                 )
@@ -54,7 +59,9 @@ class API:
                 )
 
                 # call-site arguments has the highest precedence
-                final_request_kwargs = after_middleware_kwargs | request_kwargs
+                extra_kwargs = request_kwargs or {}
+                extra_kwargs |= extra_request_kwargs
+                final_request_kwargs = after_middleware_kwargs | extra_kwargs
                 resp = requests.request(**final_request_kwargs)
 
                 resp.raise_for_status()
