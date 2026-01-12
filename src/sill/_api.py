@@ -93,7 +93,7 @@ class API:
 
                 resp.raise_for_status()
 
-                return resp.json()
+                return resp
 
             wrapper_post._method = "POST"  # metadata for, e.g., batching
             return wrapper_post

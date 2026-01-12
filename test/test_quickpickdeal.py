@@ -18,7 +18,7 @@ def test_get_customer():
 def test_create_customer():
     resp = create_customer(
         email="test@company.org", first_name="Jessie", last_name="Doe"
-    )
+    ).json()
 
     assert resp["Success"]
     assert resp["Error"] is None
