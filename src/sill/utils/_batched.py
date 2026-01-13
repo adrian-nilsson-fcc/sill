@@ -1,3 +1,5 @@
+import functools
+import inspect
 import warnings
 from datetime import UTC, datetime, timedelta
 from functools import wraps
@@ -66,20 +68,21 @@ def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta):
 
     :param start_arg: Name of the start datetime parameter in the decorated function.
     :param end_arg: Name of the end datetime parameter in the decorated function.
+    :param chunk_size: Size of each chunk as a timedelta.
     """
 
     def decorator_batched(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
-            start, end = _extract_interval(start_arg, end_arg, kwargs=kwargs)
+            start, end = _extract_interval(f, start_arg, end_arg, **kwargs)
 
             def batch_iter():
-                request_json = kwargs["request_kwargs"].setdefault("json", {})
                 for start_, end_ in _chunk_dates(start, end, chunk_size=chunk_size):
-                    request_json[start_arg] = start_.isoformat()
-                    request_json[end_arg] = end_.isoformat()
-
-                    resp = f(*args, **kwargs)
+                    bound = _bind_args(f, *args, **kwargs)
+                    _modify_signature(
+                        f._method, bound.arguments, start_, start_arg, end_, end_arg
+                    )
+                    resp = f(*bound.args, **bound.kwargs)
                     yield resp
 
             responses = list(chain(batch_iter()))
@@ -90,30 +93,127 @@ def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta):
     return decorator_batched
 
 
-def _extract_interval(
-    start_arg: str,
-    end_arg: str,
-    *,
-    kwargs: dict,
-) -> tuple[datetime, datetime]:
-    request_kwargs = kwargs.get("request_kwargs", None)
+def _bind_args(f, *args, **kwargs):
+    sig = inspect.signature(
+        f, follow_wrapped=False
+    )  # We want to inspect the get/post wrapper's signature, so don't follow wrapped
+    bound = sig.bind(*args, **kwargs)
+    bound.apply_defaults()
 
-    if request_kwargs is None:
+    return bound
+
+
+def _modify_signature(
+    method: str,
+    mut_params: dict,
+    start: datetime,
+    start_arg: str,
+    end: datetime | None = None,
+    end_arg: str | None = None,
+) -> None:
+    """
+    Modifies the mutable parameters dictionary to update the start and (optionally) end datetime arguments.
+    :param method: HTTP method of the request ("GET" or "POST").
+    :param mut_params: Mutable parameters dictionary from the bound function.
+    :param start: New start datetime.
+    :param start_arg: Name of the start datetime parameter.
+    :param end: New end datetime (optional).
+    :param end_arg: Name of the end datetime parameter (optional).
+    :raises ValueError: If the start_arg is not found in any of the expected places in the mutable parameters.
+    """
+    match method:
+        case "GET":
+            # GET requests only accept requests.request arguments as extra kwargs; so look in the "json" key
+            mut_args = _find_request_json_kwarg(mut_params)
+        case "POST":
+            # POST requests pass kwargs to the decorated function directly; look there first
+            mut_args = mut_params["kwargs"]
+            if start_arg not in mut_args:
+                # if not in direct kwargs, request_kwargs["json"] must be present
+                mut_args = _find_request_json_kwarg(mut_params)
+        case _:
+            raise ValueError(f"Unsupported method: {method}")
+
+    if start_arg not in mut_args:
         raise ValueError(
-            "Start and end times must be passed in the 'request_kwargs' argument, but it was not found."
+            f"The signature does not contain a '{start_arg}' batching start datetime parameter to modify."
         )
 
-    start = None
-    end = None
-    if (json_kwarg := request_kwargs.get("json", None)) is not None:
-        start = json_kwarg.get(start_arg, None)
-        end = json_kwarg.get(end_arg, None)
+    mut_args[start_arg] = start.isoformat()
+    if end is not None:
+        mut_args[end_arg] = end.isoformat()
 
-    if start is None and end is None:
-        # For now, only look in json (no support for query params yet)
+
+def _find_request_json_kwarg(d: dict) -> dict:
+    request_kwargs = d.get("request_kwargs")
+    if request_kwargs is None or "json" not in request_kwargs:
+        raise ValueError(
+            "The signature has no place for batching parameters; expected to find them in request_kwargs['json']"
+        )
+    return request_kwargs["json"]
+
+
+def _extract_interval(
+    f, start_arg: str, end_arg: str | None = None, *args, **kwargs
+) -> tuple[datetime, datetime | None]:
+    """
+    Extract the start and end datetime arguments from the decorated function's parameters.
+    Selects the appropriate extraction method based on the HTTP method, which is expected to be
+    stored as metadata in the function's _method attribute.
+
+    :param f: The decorated function.
+    :param start_arg: Name of the start datetime parameter.
+    :param end_arg: Name of the end datetime parameter (optional).
+    :param args: Positional arguments to the decorated function.
+    :param kwargs: Keyword arguments to the decorated function.
+    :return: The start and optional end datetime arguments as a tuple.
+    :raises ValueError: If the start argument is not found or if the HTTP method is unsupported.
+    """
+    match m := f._method:
+        case "GET":
+            extract_func = _extract_interval_get
+        case "POST":
+            extract_func = functools.partial(_extract_interval_post, args=args, f=f)
+        case _:
+            raise ValueError(f"Unsupported method: {m}")
+
+    start, end = extract_func(start_arg, end_arg, **kwargs)
+    if start is None:
         raise ValueError(f"Expected start argument '{start_arg}' not found in kwargs")
 
-    return _to_datetime(start), _to_datetime(end)
+    start = _to_datetime(start)
+    end = _to_datetime(end) if end is not None else None
+
+    return start, end
+
+
+def _extract_interval_get(
+    start_arg: str, end_arg: str | None = None, **kwargs
+) -> tuple[datetime | None, datetime | None]:
+    # GET requests only accept requests.request arguments as extra kwargs; so use the "json" kwarg (TODO: support query params?)
+    start = kwargs.get("json", {}).get(start_arg)
+    end = kwargs.get("json", {}).get(end_arg)
+
+    return start, end
+
+
+def _extract_interval_post(
+    start_arg: str, end_arg: str | None = None, *, args, f, **kwargs
+) -> tuple[datetime | None, datetime | None]:
+    # find start/end args regardless of whether they were passed positionally or as keywords
+    bound = _bind_args(f, *args, **kwargs)
+    start = bound.kwargs.get(start_arg)
+    end = bound.kwargs.get(end_arg)
+
+    # request_kwargs["json"] takes precedence over direct kwargs
+    request_kwargs = bound.kwargs.get("request_kwargs")
+    if request_kwargs is not None:
+        # For now, only look in json (no support for query params yet)
+        if (json_kwarg := request_kwargs.get("json")) is not None:
+            start = json_kwarg.get(start_arg, start)
+            end = json_kwarg.get(end_arg, end)
+
+    return start, end
 
 
 def _to_datetime(dt: str | datetime) -> datetime:

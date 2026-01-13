@@ -89,8 +89,8 @@ def history_batched_post(base_url: str, path: str, chunk_size: timedelta):
 
     @sill.utils.batched(start_arg="start", end_arg="end", chunk_size=chunk_size)
     @api.post(path=path)
-    def get_history():
-        return None
+    def get_history(start: str, end: str | None = None):
+        return {"start": start, "end": end}
 
     return get_history
 
@@ -114,12 +114,12 @@ def test_batched_server(ts, make_httpserver):
     if len(ts) > 1:
         request_payload["end"] = ts[-1]["ts"]
 
-    request_kwargs = {"json": to_jsonable_python(request_payload)}
+    request_json = to_jsonable_python(request_payload)
     try:
         server.expect_request("/history", method="GET").respond_with_handler(handler)
         get_history = history_endpoint(server.url_for(""), path="history")
 
-        resp = get_history(request_kwargs=request_kwargs)
+        resp = get_history(json=request_json)
         resp_values = TypeAdapter(list[dict[str, datetime | float]]).validate_json(
             resp.content
         )
@@ -137,12 +137,11 @@ def test_batched_request(ts, n_chunks, method, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
 
-    request_payload = {"start": ts[0]["ts"], "end": ts[-1]["ts"]}
+    history_kwargs = {"start": ts[0]["ts"], "end": ts[-1]["ts"]}
+    history_json = to_jsonable_python(history_kwargs)
+
     chunk_size = (ts[-1]["ts"] - ts[0]["ts"]) / n_chunks
     assume(chunk_size > timedelta(0))
-
-    request_kwargs = {"json": to_jsonable_python(request_payload)}
-
     endpoint = _get_batched_handler(method)
     try:
         server.expect_request("/history", method=method).respond_with_handler(handler)
@@ -150,7 +149,14 @@ def test_batched_request(ts, n_chunks, method, make_httpserver):
             server.url_for(""), path="history", chunk_size=chunk_size
         )
 
-        resp = get_history(request_kwargs=request_kwargs)
+        match method:
+            case "GET":
+                resp = get_history(json=history_json)
+            case "POST":
+                resp = get_history(**history_json)
+            case _:
+                raise ValueError(f"Unsupported method: {method}")
+
         assert (
             len(resp) >= n_chunks and len(resp) <= n_chunks + 1
         )  # rounding can cause this to be off-by-one
@@ -171,12 +177,12 @@ def test_ts_regression(httpserver):
 
     handler = handler_factory(data)
     request_payload = {"start": data[0]["ts"]}
-    request_kwargs = {"json": to_jsonable_python(request_payload)}
+    request_json = to_jsonable_python(request_payload)
 
     httpserver.expect_request("/history", method="GET").respond_with_handler(handler)
     get_history = history_endpoint(httpserver.url_for(""), path="history")
 
-    resp = get_history(request_kwargs=request_kwargs)
+    resp = get_history(json=request_json)
     resp_values = TypeAdapter(list[dict[str, datetime | float]]).validate_json(
         resp.content
     )

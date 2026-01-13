@@ -37,8 +37,7 @@ class API:
             def wrapper_get(
                 *,
                 path_format: dict[str] | None = None,
-                request_kwargs: dict[str] | None = None,
-                **extra_request_kwargs,
+                **request_kwargs,
             ):
                 formatted_path = (
                     path if path_format is None else path.format(**path_format)
@@ -59,16 +58,16 @@ class API:
                 )
 
                 # call-site arguments has the highest precedence
-                extra_kwargs = request_kwargs or {}
-                extra_kwargs |= extra_request_kwargs
-                final_request_kwargs = after_middleware_kwargs | extra_kwargs
+                final_request_kwargs = after_middleware_kwargs | request_kwargs
                 resp = requests.request(**final_request_kwargs)
 
                 resp.raise_for_status()
 
                 return f(resp)
 
-            wrapper_get._method = "GET"  # metadata for, e.g., batching
+            # metadata for introspection of  the decorated function
+            wrapper_get._method = "GET"
+
             return wrapper_get
 
         return decorator_get
@@ -102,7 +101,9 @@ class API:
 
                 return resp
 
-            wrapper_post._method = "POST"  # metadata for, e.g., batching
+            # metadata for introspection of  the decorated function
+            wrapper_post._method = "POST"
+
             return wrapper_post
 
         return decorator_post
