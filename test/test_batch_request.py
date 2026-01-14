@@ -48,6 +48,12 @@ def default_server():
 def handler_factory(data):
     def handler(request: Request) -> Response:
         request_json = request.get_json()
+        if request_json.get("id") is None:
+            resp = Response(
+                json.dumps({"error": "Missing 'id' in request JSON body"}), status=400
+            )
+            return resp
+
         start = datetime.fromisoformat(request_json["start"])
         end = request_json.get("end")
 
@@ -63,6 +69,14 @@ def handler_factory(data):
         return resp
 
     return handler
+
+
+def make_request_json(ts) -> dict:
+    request_payload = {"id": "uuid", "start": ts[0]["ts"]}
+    if len(ts) > 1:
+        request_payload["end"] = ts[-1]["ts"]
+
+    return to_jsonable_python(request_payload)
 
 
 def history_endpoint(base_url: str, path: str):
@@ -108,36 +122,22 @@ def history_batched_post_no_capture(base_url: str, path: str, chunk_size: timede
     return get_history
 
 
-def history_batched_post_inject_args(base_url: str, path: str, chunk_size: timedelta):
-    api = sill.API(url=base_url)
-
-    @sill.utils.batched(start_arg="start", end_arg="end", chunk_size=chunk_size)
-    @api.post(path=path)
-    def get_history(asset_id: str, start: str, end: str | None = None):
-        """
-        Include the full signature, but call with requests_kwargs, which should inject arguments to the decorated function.
-        """
-        assert isinstance(start, str)  # sanity check to ensure args are captured
-        return {"id": asset_id, "start": start, "end": end}
-
-    return get_history
-
-
 def call_endpoint(
     endpoint, url: str, json_payload: dict, chunk_size: timedelta
 ) -> requests.Response | None:
     fetch_history = endpoint(url, path="history", chunk_size=chunk_size)
 
+    # fetch_history expects an "asset_id" parameter, but the server expects "id"
+    fetch_kwargs = json_payload.copy()
+    id_ = fetch_kwargs.pop("id")
+    fetch_kwargs["asset_id"] = id_
+
     if endpoint is history_batched_get:
         resp = fetch_history(json=json_payload)
     elif endpoint is history_batched_post:
-        resp = fetch_history(**json_payload)
-
-    elif (
-        endpoint is history_batched_post_no_capture
-        or endpoint is history_batched_post_inject_args
-    ):
-        resp = fetch_history(request_kwargs={"json": json_payload})
+        resp = fetch_history(**fetch_kwargs)
+    elif endpoint is history_batched_post_no_capture:
+        resp = fetch_history(asset_id=None, request_kwargs={"json": json_payload})
     else:
         raise ValueError("Unsupported endpoint")
 
@@ -148,12 +148,8 @@ def call_endpoint(
 def test_batched_server(ts, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
+    request_json = make_request_json(ts)
 
-    request_payload = {"start": ts[0]["ts"]}
-    if len(ts) > 1:
-        request_payload["end"] = ts[-1]["ts"]
-
-    request_json = to_jsonable_python(request_payload)
     try:
         server.expect_request("/history", method="GET").respond_with_handler(handler)
         get_history = history_endpoint(server.url_for(""), path="history")
@@ -176,16 +172,13 @@ def test_batched_server(ts, make_httpserver):
             history_batched_get,
             history_batched_post,
             history_batched_post_no_capture,
-            history_batched_post_inject_args,
         ]
     ),
 )
 def test_batched_request(ts, n_chunks, endpoint, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
-
-    history_kwargs = {"asset_id": "uuid", "start": ts[0]["ts"], "end": ts[-1]["ts"]}
-    history_json = to_jsonable_python(history_kwargs)
+    history_json = make_request_json(ts)
 
     chunk_size = (ts[-1]["ts"] - ts[0]["ts"]) / n_chunks
     assume(chunk_size > timedelta(0))
@@ -220,9 +213,12 @@ def test_batched_request(ts, n_chunks, endpoint, make_httpserver):
 def test_batched_post_expected_error(ts, n_chunks, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
+    history_json = make_request_json(ts)
 
-    history_kwargs = {"start": ts[0]["ts"], "end": ts[-1]["ts"]}
-    history_json = to_jsonable_python(history_kwargs)
+    # fetch_history expects an "asset_id" parameter, but the server expects "id"
+    fetch_kwargs = history_json.copy()
+    id_ = fetch_kwargs.pop("id")
+    fetch_kwargs["asset_id"] = id_
 
     chunk_size = (ts[-1]["ts"] - ts[0]["ts"]) / n_chunks
     assume(chunk_size > timedelta(0))
@@ -234,18 +230,14 @@ def test_batched_post_expected_error(ts, n_chunks, make_httpserver):
             server.url_for(""), path="history", chunk_size=chunk_size
         )
 
-        with pytest.raises(ValueError):
-            # We forbid this combination since it can lead to surprising behavior.
-            # The semantics of request_kwargs is that its keys short-circuit all other
-            # kwargs, including middleware-added ones and the json-serializable object
-            # returned by the decorated function. Hence, if this call is allowed, it
-            # would be equivalent to calling fetch_history(request_kwargs={"json": None}),
-            # which is what the raised error suggests users to do instead.
-            # It's still fine to include other request_kwargs keys like params, timeout, etc.
-            fetch_history(asset_id="", **history_json, request_kwargs={"json": None})
+        with pytest.raises(requests.exceptions.HTTPError) as e:
+            # Overwrites the returned JSON from fetch_history with empty dict; causes server to error
+            fetch_history(**fetch_kwargs, request_kwargs={"json": {}})
+        assert e.value.response.status_code == 400
+
         with pytest.raises(TypeError):
-            # does not match the signature of history_batched_post.get_history (missing asset_id)
-            fetch_history(request_kwargs={"json": history_json})
+            # does not match the signature of history_batched_post.get_history (missing start/end)
+            fetch_history(asset_id="", request_kwargs={"json": history_json})
 
     finally:
         server.clear()
@@ -255,8 +247,7 @@ def test_ts_regression(httpserver):
     data = [{"ts": datetime(2000, 1, 1, 0, 0), "value": 0.0}]
 
     handler = handler_factory(data)
-    request_payload = {"start": data[0]["ts"]}
-    request_json = to_jsonable_python(request_payload)
+    request_json = make_request_json(data)
 
     httpserver.expect_request("/history", method="GET").respond_with_handler(handler)
     get_history = history_endpoint(httpserver.url_for(""), path="history")

@@ -141,25 +141,11 @@ def _modify_signature(
                 # request_kwargs["json"] needs to be updated if it exists since it takes precedence over direct kwargs
                 req_kwargs_json = _find_request_json_kwarg(mut_params)
 
-                if mut_params["kwargs"]:
-                    raise ValueError(
-                        "Using direct kwargs and request_kwargs['json'] is not allowed. Remove the direct kwargs if you really want to override the JSON body."
-                    )
-
                 has_batch_request_kwargs = (
                     start_arg in req_kwargs_json or end_arg in req_kwargs_json
                 )
                 if has_batch_request_kwargs:
                     modify(req_kwargs_json)
-
-                # Inject user-captured parameters.
-                # This makes sure that the decorated function receives the expected
-                # arguments, which prevents it from crashing when request_kwargs
-                # overrides JSON data.
-                for request_json_kwarg in req_kwargs_json:
-                    if request_json_kwarg in user_parameters:
-                        val = req_kwargs_json[request_json_kwarg]
-                        mut_params["kwargs"][request_json_kwarg] = val
             elif start_arg in user_parameters:
                 modify(mut_params["kwargs"])
         case _:
