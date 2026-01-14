@@ -80,7 +80,7 @@ def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta):
                 for start_, end_ in _chunk_dates(start, end, chunk_size=chunk_size):
                     bound = _bind_args(f, *args, **kwargs)
                     _modify_signature(
-                        f._method, bound.arguments, start_, start_arg, end_, end_arg
+                        f, bound.arguments, start_, start_arg, end_, end_arg
                     )
                     resp = f(*bound.args, **bound.kwargs)
                     yield resp
@@ -104,7 +104,7 @@ def _bind_args(f, *args, **kwargs):
 
 
 def _modify_signature(
-    method: str,
+    f,
     mut_params: dict,
     start: datetime,
     start_arg: str,
@@ -113,7 +113,7 @@ def _modify_signature(
 ) -> None:
     """
     Modifies the mutable parameters dictionary to update the start and (optionally) end datetime arguments.
-    :param method: HTTP method of the request ("GET" or "POST").
+    :param f: The decorated function.
     :param mut_params: Mutable parameters dictionary from the bound function.
     :param start: New start datetime.
     :param start_arg: Name of the start datetime parameter.
@@ -121,27 +121,51 @@ def _modify_signature(
     :param end_arg: Name of the end datetime parameter (optional).
     :raises ValueError: If the start_arg is not found in any of the expected places in the mutable parameters.
     """
-    match method:
+    new_start = start.isoformat()
+    new_end = end.isoformat() if end is not None else None
+
+    def modify(d: dict):
+        d[start_arg] = new_start
+        if new_end is not None:
+            d[end_arg] = new_end
+
+    match f._method:
         case "GET":
             # GET requests only accept requests.request arguments as extra kwargs; so look in the "json" key
             mut_args = _find_request_json_kwarg(mut_params)
+            modify(mut_args)
         case "POST":
-            # POST requests pass kwargs to the decorated function directly; look there first
-            mut_args = mut_params["kwargs"]
-            if start_arg not in mut_args:
-                # if not in direct kwargs, request_kwargs["json"] must be present
-                mut_args = _find_request_json_kwarg(mut_params)
+            user_parameters = inspect.signature(f).parameters
+
+            if mut_params.get("request_kwargs") is not None:
+                # request_kwargs["json"] needs to be updated if it exists since it takes precedence over direct kwargs
+                req_kwargs_json = _find_request_json_kwarg(mut_params)
+
+                if mut_params["kwargs"]:
+                    raise ValueError(
+                        "Using direct kwargs and request_kwargs['json'] is not allowed. Remove the direct kwargs if you really want to override the JSON body."
+                    )
+
+                has_batch_request_kwargs = (
+                    start_arg in req_kwargs_json or end_arg in req_kwargs_json
+                )
+                if has_batch_request_kwargs:
+                    modify(req_kwargs_json)
+
+                # Inject user-captured parameters.
+                # This makes sure that the decorated function receives the expected
+                # arguments, which prevents it from crashing when request_kwargs
+                # overrides JSON data.
+                for request_json_kwarg in req_kwargs_json:
+                    if request_json_kwarg in user_parameters:
+                        val = req_kwargs_json[request_json_kwarg]
+                        mut_params["kwargs"][request_json_kwarg] = val
+            elif start_arg in user_parameters:
+                modify(mut_params["kwargs"])
         case _:
-            raise ValueError(f"Unsupported method: {method}")
+            raise ValueError(f"Unsupported method: {f._method}")
 
-    if start_arg not in mut_args:
-        raise ValueError(
-            f"The signature does not contain a '{start_arg}' batching start datetime parameter to modify."
-        )
-
-    mut_args[start_arg] = start.isoformat()
-    if end is not None:
-        mut_args[end_arg] = end.isoformat()
+    return
 
 
 def _find_request_json_kwarg(d: dict) -> dict:

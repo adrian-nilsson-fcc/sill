@@ -4,7 +4,9 @@ from datetime import UTC, datetime, timedelta
 from itertools import chain, dropwhile, takewhile
 from operator import itemgetter
 
-from hypothesis import assume, given
+import pytest
+import requests
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from pydantic import TypeAdapter
 from pydantic_core import to_jsonable_python
@@ -89,20 +91,57 @@ def history_batched_post(base_url: str, path: str, chunk_size: timedelta):
 
     @sill.utils.batched(start_arg="start", end_arg="end", chunk_size=chunk_size)
     @api.post(path=path)
-    def get_history(start: str, end: str | None = None):
-        return {"start": start, "end": end}
+    def get_history(asset_id: str, start: str, end: str | None = None):
+        return {"id": asset_id, "start": start, "end": end}
 
     return get_history
 
 
-def _get_batched_handler(method: str):
-    match method:
-        case "GET":
-            return history_batched_get
-        case "POST":
-            return history_batched_post
-        case _:
-            raise ValueError(f"Unsupported method: {method}")
+def history_batched_post_no_capture(base_url: str, path: str, chunk_size: timedelta):
+    api = sill.API(url=base_url)
+
+    @sill.utils.batched(start_arg="start", end_arg="end", chunk_size=chunk_size)
+    @api.post(path=path)
+    def get_history(asset_id: str):
+        return {"id": asset_id}
+
+    return get_history
+
+
+def history_batched_post_inject_args(base_url: str, path: str, chunk_size: timedelta):
+    api = sill.API(url=base_url)
+
+    @sill.utils.batched(start_arg="start", end_arg="end", chunk_size=chunk_size)
+    @api.post(path=path)
+    def get_history(asset_id: str, start: str, end: str | None = None):
+        """
+        Include the full signature, but call with requests_kwargs, which should inject arguments to the decorated function.
+        """
+        assert isinstance(start, str)  # sanity check to ensure args are captured
+        return {"id": asset_id, "start": start, "end": end}
+
+    return get_history
+
+
+def call_endpoint(
+    endpoint, url: str, json_payload: dict, chunk_size: timedelta
+) -> requests.Response | None:
+    fetch_history = endpoint(url, path="history", chunk_size=chunk_size)
+
+    if endpoint is history_batched_get:
+        resp = fetch_history(json=json_payload)
+    elif endpoint is history_batched_post:
+        resp = fetch_history(**json_payload)
+
+    elif (
+        endpoint is history_batched_post_no_capture
+        or endpoint is history_batched_post_inject_args
+    ):
+        resp = fetch_history(request_kwargs={"json": json_payload})
+    else:
+        raise ValueError("Unsupported endpoint")
+
+    return resp
 
 
 @given(ts=st_timeseries)
@@ -128,35 +167,37 @@ def test_batched_server(ts, make_httpserver):
         server.clear()
 
 
+@settings(max_examples=500)  # Run more examples since we test several endpoints
 @given(
     ts=st_timeseries.filter(lambda ts: len(ts) > 1),
     n_chunks=st.integers(min_value=2, max_value=10),
-    method=st.sampled_from(["GET", "POST"]),
+    endpoint=st.sampled_from(
+        [
+            history_batched_get,
+            history_batched_post,
+            history_batched_post_no_capture,
+            history_batched_post_inject_args,
+        ]
+    ),
 )
-def test_batched_request(ts, n_chunks, method, make_httpserver):
+def test_batched_request(ts, n_chunks, endpoint, make_httpserver):
     server = make_httpserver
     handler = handler_factory(ts)
 
-    history_kwargs = {"start": ts[0]["ts"], "end": ts[-1]["ts"]}
+    history_kwargs = {"asset_id": "uuid", "start": ts[0]["ts"], "end": ts[-1]["ts"]}
     history_json = to_jsonable_python(history_kwargs)
 
     chunk_size = (ts[-1]["ts"] - ts[0]["ts"]) / n_chunks
     assume(chunk_size > timedelta(0))
-    endpoint = _get_batched_handler(method)
     try:
-        server.expect_request("/history", method=method).respond_with_handler(handler)
-        get_history = endpoint(
-            server.url_for(""), path="history", chunk_size=chunk_size
+        for method in ["GET", "POST"]:
+            server.expect_request("/history", method=method).respond_with_handler(
+                handler
+            )
+
+        resp = call_endpoint(
+            endpoint, server.url_for(""), history_json, chunk_size=chunk_size
         )
-
-        match method:
-            case "GET":
-                resp = get_history(json=history_json)
-            case "POST":
-                resp = get_history(**history_json)
-            case _:
-                raise ValueError(f"Unsupported method: {method}")
-
         assert (
             len(resp) >= n_chunks and len(resp) <= n_chunks + 1
         )  # rounding can cause this to be off-by-one
@@ -168,6 +209,44 @@ def test_batched_request(ts, n_chunks, method, make_httpserver):
 
         resp_values = list(chain.from_iterable(resp_json))
         assert resp_values == ts
+    finally:
+        server.clear()
+
+
+@given(
+    ts=st_timeseries.filter(lambda ts: len(ts) > 1),
+    n_chunks=st.integers(min_value=2, max_value=10),
+)
+def test_batched_post_expected_error(ts, n_chunks, make_httpserver):
+    server = make_httpserver
+    handler = handler_factory(ts)
+
+    history_kwargs = {"start": ts[0]["ts"], "end": ts[-1]["ts"]}
+    history_json = to_jsonable_python(history_kwargs)
+
+    chunk_size = (ts[-1]["ts"] - ts[0]["ts"]) / n_chunks
+    assume(chunk_size > timedelta(0))
+
+    endpoint = history_batched_post
+    try:
+        server.expect_request("/history", method="POST").respond_with_handler(handler)
+        fetch_history = endpoint(
+            server.url_for(""), path="history", chunk_size=chunk_size
+        )
+
+        with pytest.raises(ValueError):
+            # We forbid this combination since it can lead to surprising behavior.
+            # The semantics of request_kwargs is that its keys short-circuit all other
+            # kwargs, including middleware-added ones and the json-serializable object
+            # returned by the decorated function. Hence, if this call is allowed, it
+            # would be equivalent to calling fetch_history(request_kwargs={"json": None}),
+            # which is what the raised error suggests users to do instead.
+            # It's still fine to include other request_kwargs keys like params, timeout, etc.
+            fetch_history(asset_id="", **history_json, request_kwargs={"json": None})
+        with pytest.raises(TypeError):
+            # does not match the signature of history_batched_post.get_history (missing asset_id)
+            fetch_history(request_kwargs={"json": history_json})
+
     finally:
         server.clear()
 
