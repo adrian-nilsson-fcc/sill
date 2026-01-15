@@ -6,7 +6,7 @@ from operator import itemgetter
 
 import pytest
 import requests
-from hypothesis import assume, given, settings
+from hypothesis import assume, given
 from hypothesis import strategies as st
 from pydantic import TypeAdapter
 from pydantic_core import to_jsonable_python
@@ -163,17 +163,13 @@ def test_batched_server(ts, make_httpserver):
         server.clear()
 
 
-@settings(max_examples=500)  # Run more examples since we test several endpoints
+@pytest.mark.parametrize(
+    "endpoint",
+    [history_batched_get, history_batched_post, history_batched_post_no_capture],
+)
 @given(
     ts=st_timeseries.filter(lambda ts: len(ts) > 1),
     n_chunks=st.integers(min_value=2, max_value=10),
-    endpoint=st.sampled_from(
-        [
-            history_batched_get,
-            history_batched_post,
-            history_batched_post_no_capture,
-        ]
-    ),
 )
 def test_batched_request(ts, n_chunks, endpoint, make_httpserver):
     server = make_httpserver
