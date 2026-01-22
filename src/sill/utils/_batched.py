@@ -57,7 +57,7 @@ def _chunk_dates(
         current_start = current_end
 
 
-def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta):
+def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta, how: str):
     """
     Decorator to batch requests over time intervals.
 
@@ -69,18 +69,26 @@ def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta):
     :param start_arg: Name of the start datetime parameter in the decorated function.
     :param end_arg: Name of the end datetime parameter in the decorated function.
     :param chunk_size: Size of each chunk as a timedelta.
+    :param how: How the parameters are passed; either 'json' for JSON body or 'query' for query parameters.
     """
+
+    if how == "json":
+        key = "json"
+    elif how == "query":
+        key = "params"
+    else:
+        raise ValueError(f"Unsupported 'how' value: {how}; expected 'json' or 'query'")
 
     def decorator_batched(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
-            start, end = _extract_interval(f, start_arg, end_arg, **kwargs)
+            start, end = _extract_interval(f, key, start_arg, end_arg, **kwargs)
 
             def batch_iter():
                 for start_, end_ in _chunk_dates(start, end, chunk_size=chunk_size):
                     bound = _bind_args(f, *args, **kwargs)
                     _modify_signature(
-                        f, bound.arguments, start_, start_arg, end_, end_arg
+                        f, bound.arguments, key, start_, start_arg, end_, end_arg
                     )
                     resp = f(*bound.args, **bound.kwargs)
                     yield resp
@@ -106,6 +114,7 @@ def _bind_args(f, *args, **kwargs):
 def _modify_signature(
     f,
     mut_params: dict,
+    param_key: str,
     start: datetime,
     start_arg: str,
     end: datetime | None = None,
@@ -115,6 +124,7 @@ def _modify_signature(
     Modifies the mutable parameters dictionary to update the start and (optionally) end datetime arguments.
     :param f: The decorated function.
     :param mut_params: Mutable parameters dictionary from the bound function.
+    :param param_key: The key under which the parameters are passed (e.g., 'json' for JSON body or 'params' for query parameters).
     :param start: New start datetime.
     :param start_arg: Name of the start datetime parameter.
     :param end: New end datetime (optional).
@@ -131,21 +141,21 @@ def _modify_signature(
 
     match f._method:
         case "GET":
-            # GET requests only accept requests.request arguments as extra kwargs; so look in the "json" key
-            mut_args = _find_request_json_kwarg(mut_params)
+            # GET requests only accept requests.request arguments as extra kwargs; so look in the given key
+            mut_args = _find_request_kwarg(mut_params, key=param_key)
             modify(mut_args)
         case "POST":
             user_parameters = inspect.signature(f).parameters
 
             if mut_params.get("request_kwargs") is not None:
-                # request_kwargs["json"] needs to be updated if it exists since it takes precedence over direct kwargs
-                req_kwargs_json = _find_request_json_kwarg(mut_params)
+                # request_kwargs["{param_key}"] needs to be updated if it exists since it takes precedence over direct kwargs
+                req_kwargs = _find_request_kwarg(mut_params, key=param_key)
 
                 has_batch_request_kwargs = (
-                    start_arg in req_kwargs_json or end_arg in req_kwargs_json
+                    start_arg in req_kwargs or end_arg in req_kwargs
                 )
                 if has_batch_request_kwargs:
-                    modify(req_kwargs_json)
+                    modify(req_kwargs)
             elif start_arg in user_parameters:
                 modify(mut_params["kwargs"])
         case _:
@@ -154,17 +164,17 @@ def _modify_signature(
     return
 
 
-def _find_request_json_kwarg(d: dict) -> dict:
+def _find_request_kwarg(d: dict, key) -> dict:
     request_kwargs = d.get("request_kwargs")
-    if request_kwargs is None or "json" not in request_kwargs:
+    if request_kwargs is None or key not in request_kwargs:
         raise ValueError(
-            "The signature has no place for batching parameters; expected to find them in request_kwargs['json']"
+            f"The signature has no place for batching parameters; expected to find them in request_kwargs['{key}']"
         )
-    return request_kwargs["json"]
+    return request_kwargs[key]
 
 
 def _extract_interval(
-    f, start_arg: str, end_arg: str | None = None, *args, **kwargs
+    f, key: str, start_arg: str, end_arg: str | None = None, *args, **kwargs
 ) -> tuple[datetime, datetime | None]:
     """
     Extract the start and end datetime arguments from the decorated function's parameters.
@@ -172,6 +182,7 @@ def _extract_interval(
     stored as metadata in the function's _method attribute.
 
     :param f: The decorated function.
+    :key: The key under which the parameters are passed (e.g., 'json' for JSON body or 'params' for query parameters).
     :param start_arg: Name of the start datetime parameter.
     :param end_arg: Name of the end datetime parameter (optional).
     :param args: Positional arguments to the decorated function.
@@ -187,7 +198,7 @@ def _extract_interval(
         case _:
             raise ValueError(f"Unsupported method: {m}")
 
-    start, end = extract_func(start_arg, end_arg, **kwargs)
+    start, end = extract_func(key, start_arg, end_arg, **kwargs)
     if start is None:
         raise ValueError(f"Expected start argument '{start_arg}' not found in kwargs")
 
@@ -198,17 +209,17 @@ def _extract_interval(
 
 
 def _extract_interval_get(
-    start_arg: str, end_arg: str | None = None, **kwargs
+    key: str, start_arg: str, end_arg: str | None = None, **kwargs
 ) -> tuple[datetime | None, datetime | None]:
     # GET requests only accept requests.request arguments as extra kwargs; so use the "json" kwarg (TODO: support query params?)
-    start = kwargs.get("json", {}).get(start_arg)
-    end = kwargs.get("json", {}).get(end_arg)
+    start = kwargs.get(key, {}).get(start_arg)
+    end = kwargs.get(key, {}).get(end_arg)
 
     return start, end
 
 
 def _extract_interval_post(
-    start_arg: str, end_arg: str | None = None, *, args, f, **kwargs
+    key: str, start_arg: str, end_arg: str | None = None, *, args, f, **kwargs
 ) -> tuple[datetime | None, datetime | None]:
     # find start/end args regardless of whether they were passed positionally or as keywords
     bound = _bind_args(f, *args, **kwargs)
@@ -219,9 +230,9 @@ def _extract_interval_post(
     request_kwargs = bound.kwargs.get("request_kwargs")
     if request_kwargs is not None:
         # For now, only look in json (no support for query params yet)
-        if (json_kwarg := request_kwargs.get("json")) is not None:
-            start = json_kwarg.get(start_arg, start)
-            end = json_kwarg.get(end_arg, end)
+        if (key_kwarg := request_kwargs.get(key)) is not None:
+            start = key_kwarg.get(start_arg, start)
+            end = key_kwarg.get(end_arg, end)
 
     return start, end
 
