@@ -1,9 +1,11 @@
 import functools
 import inspect
-import warnings
+import logging
 from datetime import UTC, datetime, timedelta
 from functools import wraps
 from itertools import chain
+
+logger = logging.getLogger(__name__)
 
 
 def _saturating_add(dt: datetime, delta: timedelta) -> datetime:
@@ -17,7 +19,7 @@ def _saturating_add(dt: datetime, delta: timedelta) -> datetime:
     try:
         return dt + delta
     except OverflowError:
-        warnings.warn(
+        logger.warning(
             f"Overflow when adding {delta} to {dt}; returning datetime.max instead."
         )
         return datetime.max.replace(tzinfo=dt.tzinfo)
@@ -44,7 +46,7 @@ def _chunk_dates(
         raise ValueError(f"{end=} is later than or equal to {start=}")
 
     if chunk_size > (end - start):
-        warnings.warn(
+        logger.debug(
             "Batching is unnecessary since the chunk size covers the entire requested interval."
         )
 
