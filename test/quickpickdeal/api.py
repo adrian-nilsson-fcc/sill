@@ -14,6 +14,7 @@ quickpickdeal = API(
 
 @quickpickdeal.get(path="Customer/GetAllCustomers")
 def list_customers(resp):
+    resp.raise_for_status()
     return resp.json()
 
 
@@ -22,6 +23,7 @@ def get_customer(resp):
     """
     Expects query parameter 'id'
     """
+    resp.raise_for_status()
     return resp.json()
 
 

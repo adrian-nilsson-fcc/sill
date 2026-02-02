@@ -34,7 +34,11 @@ class API:
     def get(self, path: str, **request_glob_kwargs):
         def decorator_get(f):
             @wraps(f)
-            def wrapper_get(*, path_format: dict[str] | None = None, **request_kwargs):
+            def wrapper_get(
+                *,
+                path_format: dict[str] | None = None,
+                **request_kwargs,
+            ):
                 formatted_path = (
                     path if path_format is None else path.format(**path_format)
                 )
@@ -60,6 +64,9 @@ class API:
                 resp.raise_for_status()
 
                 return f(resp)
+
+            # metadata for introspection of  the decorated function
+            wrapper_get._method = "GET"
 
             return wrapper_get
 
@@ -92,7 +99,10 @@ class API:
 
                 resp.raise_for_status()
 
-                return resp.json()
+                return resp
+
+            # metadata for introspection of  the decorated function
+            wrapper_post._method = "POST"
 
             return wrapper_post
 

@@ -1,7 +1,8 @@
 from datetime import datetime
+
 from pydantic import BaseModel, Field
 
-from sill import TokenEndpoint, BaseAuthToken
+from sill import BaseAuthToken, TokenEndpoint
 
 
 class QuickPickDealToken(BaseModel):
@@ -18,5 +19,6 @@ class QuickPickDealResponse(BaseModel):
 
 class QuickPickDealTokenEndpoint(TokenEndpoint):
     def to_base_token(self, resp):
+        resp.raise_for_status()
         resp_token = QuickPickDealResponse(**resp.json()).data
         return BaseAuthToken(token=resp_token.token, valid_until=resp_token.expires)
