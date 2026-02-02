@@ -180,8 +180,8 @@ def history_batched_get_query_param(base_url: str, path: str, chunk_size: timede
         start_arg="start", end_arg="end", chunk_size=chunk_size, how="query"
     )
     @api.get(path=path)
-    def get_history():
-        return None
+    def get_history(resp):
+        return resp
 
     return get_history
 
@@ -315,7 +315,7 @@ def test_batched_post_expected_error(ts, n_chunks, make_httpserver):
 
 @pytest.mark.parametrize(
     "endpoint",
-    [history_batched_post_query_param, history_batched_post_query_param],
+    [history_batched_get_query_param, history_batched_post_query_param],
 )
 @given(
     ts=st_timeseries.filter(lambda ts: len(ts) > 1),
