@@ -43,7 +43,7 @@ def _chunk_dates(
         raise ValueError("chunk_size must be greater than zero")
 
     if start > end:
-        raise ValueError(f"{end=} is later than or equal to {start=}")
+        raise ValueError(f"{start=} is later than or equal to {end=}")
 
     if chunk_size > (end - start):
         logger.debug(
@@ -64,9 +64,9 @@ def batched(start_arg: str, end_arg: str, *, chunk_size: timedelta, how: str):
     Decorator to batch requests over time intervals.
 
     The decorated function is expected to use a start and end datetime
-    parameters, named start_arg and end_arg respectively. The decorate function is
-    then called repeatedly for each chunked interval, and the results will be
-    concatenated before returning.
+    parameters, named start_arg and end_arg respectively. The decorated
+    function is then called repeatedly for each chunked interval, and the
+    wrapper returns a list containing one response per chunk, in call order.
 
     :param start_arg: Name of the start datetime parameter in the decorated function.
     :param end_arg: Name of the end datetime parameter in the decorated function.
@@ -213,7 +213,7 @@ def _extract_interval(
 def _extract_interval_get(
     key: str, start_arg: str, end_arg: str | None = None, **kwargs
 ) -> tuple[datetime | None, datetime | None]:
-    # GET requests only accept requests.request arguments as extra kwargs; so use the "json" kwarg (TODO: support query params?)
+    # GET requests only accept requests.request arguments in its extra kwargs, so look there for the key
     start = kwargs.get(key, {}).get(start_arg)
     end = kwargs.get(key, {}).get(end_arg)
 
