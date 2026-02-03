@@ -1,6 +1,6 @@
 [project]
 name = "sill"
-version = "0.5.0"
+version = "0.5.1"
 description = "sill: simple internet lookup library"
 readme = "README.md"
 authors = [
