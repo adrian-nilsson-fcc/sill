@@ -1,4 +1,5 @@
 import logging
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -72,7 +73,13 @@ class BearerTokenMiddleware:
         if self.token_file and self.token_file.is_file():
             self.token_model = BaseAuthToken.from_file(self.token_file)
 
+        self._token_refresh_lock = threading.Lock()
+
     def is_valid(self) -> bool:
+        if self.token_model is None:
+            logger.debug("Invalid token: token missing")
+            return False
+
         valid = self.token_model.valid_until > datetime.now(timezone.utc)
         if not valid:
             logger.info(f"token expired: expired on {self.token_model.valid_until}")
@@ -80,14 +87,20 @@ class BearerTokenMiddleware:
         return valid
 
     def process_request(self, **request_kwargs) -> dict[str]:
-        if self.token_model is None or not self.is_valid():
-            self._refresh_token()
+        if not self.is_valid():
+            self._thread_safe_token_refresh()
 
         logger.debug("Adding auth token to request header")
         request_kwargs.setdefault("headers", {})
         request_kwargs["headers"]["Authorization"] = f"Bearer {self.token_model.token}"
 
         return request_kwargs
+
+    def _thread_safe_token_refresh(self) -> None:
+        with self._token_refresh_lock:
+            # assert that another thread has not already refreshed the token while we watied for the lock
+            if not self.is_valid():
+                self._refresh_token()
 
     def _refresh_token(self) -> None:
         logger.info("requesting a new auth token")
